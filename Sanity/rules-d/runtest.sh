@@ -129,7 +129,10 @@ rlJournalStart && {
     rlRun "RpmSnapshotCreate"
     if ! rlFetchSrcForInstalled fapolicyd; then
       rlLogWarning "Installed SRPM not available, trying latest available source package"
-      rlRun "dnf -q download -y --source fapolicyd" 0 "Fallback: download latest fapolicyd SRPM"
+      rlRun -s "dnf -q repoquery --enablerepo='*-source' --arch=src --latest-limit=1 --location fapolicyd" 0 "Fallback: locate latest fapolicyd SRPM URL"
+      SRPM_URL=$(awk 'NF {print; exit}' "$rlRun_LOG")
+      [[ -n ${SRPM_URL:-} ]] || rlDie "Fallback did not return any SRPM URL for fapolicyd"
+      rlRun "curl -fL -O \"$SRPM_URL\"" 0 "Fallback: download latest fapolicyd SRPM"
     fi
     shopt -s nullglob
     src_rpms=(./fapolicyd*.src.rpm)
