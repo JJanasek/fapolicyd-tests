@@ -77,8 +77,7 @@ fapolicyd_spec_inject_rules_test_sed() {
 # Set V_old / R_old to the newest repo build that is still older than installed.
 rules_d_resolve_older_fapolicyd_nvr() {
   local inst_epoch inst_evr e v r nvr_line cand_evr best_evr best_v best_r
-  inst_epoch=$(rpm -q --qf '%{epoch}' fapolicyd) || return 1
-  [[ -z $inst_epoch || $inst_epoch == '(none)' ]] && inst_epoch=0
+  inst_epoch=$(rpm -q --qf '%{EPOCHNUM}' fapolicyd) || return 1
   inst_evr="${inst_epoch}:${V}-${R}"
 
   rlRun -s "dnf -q repoquery --enablerepo='*' --available --latest-limit=1 --qf '%{epoch} %{version} %{release}' \"fapolicyd < ${inst_evr}\"" 0-255 "Resolve latest older fapolicyd NVR"
@@ -96,7 +95,7 @@ rules_d_resolve_older_fapolicyd_nvr() {
   fi
 
   rlLogWarning "Filtered repoquery returned no parsable result, trying full-list fallback"
-  rlRun -s "dnf -q repoquery --enablerepo='*' --available --qf '%{epoch} %{version} %{release}' fapolicyd" 0 "List available fapolicyd versions"
+  rlRun -s "dnf -q repoquery --enablerepo='*' --available --qf '%{epoch} %{version} %{release}\\n' fapolicyd" 0 "List available fapolicyd versions"
   best_evr=""
   best_v=""
   best_r=""
