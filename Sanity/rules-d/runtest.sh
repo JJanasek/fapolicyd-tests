@@ -127,9 +127,17 @@ rlJournalStart && {
     rlRun "fapSetup"
     CleanupRegister --mark "rlRun 'RpmSnapshotRevert'; rlRun 'RpmSnapshotDiscard'"
     rlRun "RpmSnapshotCreate"
-    rlRun "rlFetchSrcForInstalled fapolicyd"
-    rlRun "dnf builddep -y --enablerepo='*' ./fapolicyd*.src.rpm" 0 "Build deps from SRPM (all repos)"
-    rlRun "rpm -ivh ./fapolicyd*.src.rpm"
+    if ! rlFetchSrcForInstalled fapolicyd; then
+      rlLogWarning "Installed SRPM not available, trying latest available source package"
+      rlRun "dnf -q download -y --source fapolicyd" 0 "Fallback: download latest fapolicyd SRPM"
+    fi
+    shopt -s nullglob
+    src_rpms=(./fapolicyd*.src.rpm)
+    shopt -u nullglob
+    (( ${#src_rpms[@]} > 0 )) || rlDie "No fapolicyd SRPM downloaded"
+    SRPM="${src_rpms[0]}"
+    rlRun "dnf builddep -y --enablerepo='*' \"$SRPM\"" 0 "Build deps from SRPM (all repos)"
+    rlRun "rpm -ivh \"$SRPM\""
     R2=".$(echo "$R" | cut -d . -f 2-)"
     rlRun -s "rpmbuild -bb -D 'dist ${R2}_98' ~/rpmbuild/SPECS/fapolicyd.spec" 0 "build newer package"
     rlRun_LOG1=$rlRun_LOG
