@@ -76,30 +76,41 @@ fapolicyd_spec_inject_rules_test_sed() {
 
 # Set V_old / R_old to the newest repo build that is still older than installed.
 rules_d_resolve_older_fapolicyd_nvr() {
-  local inst_epoch inst_evr cand_epoch cand_evr nvr_line
+  local inst_epoch inst_evr e v r cand_evr best_evr best_v best_r
   inst_epoch=$(rpm -q --qf '%{epoch}' fapolicyd) || return 1
   [[ -z $inst_epoch || $inst_epoch == '(none)' ]] && inst_epoch=0
   inst_evr="${inst_epoch}:${V}-${R}"
 
-  rlRun -s "dnf -q repoquery --enablerepo='*' --available --show-duplicates --latest-limit=1 --qf '%{epoch} %{version} %{release}' \"fapolicyd < ${inst_evr}\"" 0 "Resolve latest older fapolicyd NVR"
-  nvr_line=$(awk 'NF == 3 && $1 !~ /:$/ { print; exit }' "$rlRun_LOG")
-  IFS=' ' read -r cand_epoch V_old R_old <<<"$nvr_line"
-  if [[ -z ${V_old:-} || -z ${R_old:-} ]]; then
+  rlRun -s "dnf -q repoquery --enablerepo='*' --available --qf '%{epoch} %{version} %{release}' fapolicyd" 0 "List available fapolicyd versions"
+
+  best_evr=""
+  best_v=""
+  best_r=""
+  while read -r e v r; do
+    [[ -n ${v:-} && -n ${r:-} ]] || continue
+    [[ -z ${e:-} || $e == '(none)' ]] && e=0
+    [[ $e =~ ^[0-9]+$ ]] || continue
+    cand_evr="${e}:${v}-${r}"
+
+    rlTestVersion "$cand_evr" "<" "$inst_evr" || continue
+    if [[ -z $best_evr ]] || rlTestVersion "$cand_evr" ">" "$best_evr"; then
+      best_evr="$cand_evr"
+      best_v="$v"
+      best_r="$r"
+    fi
+  done < <(sort -u "$rlRun_LOG")
+
+  if [[ -z $best_evr ]]; then
     rlLogError "no fapolicyd in repos older than installed ${V}-${R} (EVR ${inst_evr})"
-    rlLogInfo "repoquery output: $(tr '\n' ' ' < "$rlRun_LOG")"
+    rlLogInfo "Available versions in repo: $(tr '\n' '|' < "$rlRun_LOG")"
     return 1
   fi
-  [[ -z $cand_epoch || $cand_epoch == '(none)' ]] && cand_epoch=0
-  cand_evr="${cand_epoch}:${V_old}-${R_old}"
-  rlTestVersion "$cand_evr" "<" "$inst_evr" || {
-    rlLogError "resolved candidate ${V_old}-${R_old} is not older than installed ${V}-${R}"
-    return 1
-  }
+  V_old="$best_v"
+  R_old="$best_r"
   rlLogInfo "Older fapolicyd for upgrade tests: ${V_old}-${R_old} (installed ${V}-${R})"
 }
 
 PACKAGE="fapolicyd"
-HAVE_OLD_NVR=0
 rlJournalStart && {
   rlPhaseStartSetup && {
     rlRun "rlImport --all" 0 "Import libraries" || rlDie "cannot continue"
@@ -128,20 +139,16 @@ rlJournalStart && {
     pushd rpms
     rlRun "cp $(grep 'Wrote:' $rlRun_LOG | cut -d ' ' -f 2 | tr '\n' ' ') $(grep 'Wrote:' $rlRun_LOG1 | cut -d ' ' -f 2 | tr '\n' ' ') ./"
     packages=()
-    if rules_d_resolve_older_fapolicyd_nvr; then
-      HAVE_OLD_NVR=1
-      if [[ -n $(dnf repoquery --enablerepo='*' --available -q "fapolicyd-dnf-plugin = ${V_old}-${R_old}" 2>/dev/null) ]]; then
-        packages+=(fapolicyd-dnf-plugin-${V_old}-${R_old}.noarch)
-      fi
-      packages+=(
-        fapolicyd-${V_old}-${R_old}.$A
-        #fapolicyd-debuginfo-${V_old}-${R_old}.$A
-        #fapolicyd-debugsource-${V_old}-${R_old}.$A
-        fapolicyd-selinux-${V_old}-${R_old}.noarch
-      )
-    else
-      rlLogWarning "Older fapolicyd NVR not available in current repos; tests requiring upgrade from old version will be skipped"
+    rules_d_resolve_older_fapolicyd_nvr || rlDie "cannot resolve older fapolicyd NVR from repos"
+    if [[ -n $(dnf repoquery --enablerepo='*' --available -q "fapolicyd-dnf-plugin = ${V_old}-${R_old}" 2>/dev/null) ]]; then
+      packages+=(fapolicyd-dnf-plugin-${V_old}-${R_old}.noarch)
     fi
+    packages+=(
+      fapolicyd-${V_old}-${R_old}.$A
+      #fapolicyd-debuginfo-${V_old}-${R_old}.$A
+      #fapolicyd-debugsource-${V_old}-${R_old}.$A
+      fapolicyd-selinux-${V_old}-${R_old}.noarch
+    )
 
     for package in "${packages[@]}"; do
       rlRpmDownload $package
@@ -151,11 +158,10 @@ rlJournalStart && {
     _98=$( cat $rlRun_LOG | grep -o 'fapolicyd-[0-9].*_98.*\.rpm' | sed -r 's/\.rpm//' )
     _99=$( cat $rlRun_LOG | grep -o 'fapolicyd-[0-9].*_99.*\.rpm' | sed -r 's/\.rpm//' )
     popd
-    rlRun "dnf config-manager --add-repo file://$PWD/rpms"
-    repofile=$(grep -l "file://$PWD/rpms" /etc/yum.repos.d/*.repo)
+    repofile="/etc/yum.repos.d/rules-d-local.repo"
+    rlRun "printf '%s\n' '[rules-d-local]' 'name=rules-d-local' 'baseurl=file://$PWD/rpms' 'enabled=1' 'gpgcheck=0' 'skip_if_unavailable=1' 'sslverify=0' > $repofile"
     CleanupRegister "rlRun 'rm -f $repofile'"
     rlRun "dnf clean all"
-    rlRun "echo -e 'sslverify=0\ngpgcheck=0\nskip_if_unavailable=1' >> $repofile"
     rlRun "repoquery -a | grep fapolicyd" 0-255
   rlPhaseEnd; }
 
@@ -217,39 +223,31 @@ EOF
     rlPhaseEnd; }
 
     rlPhaseStartTest "upgrade from old version - default rules" && {
-      if (( HAVE_OLD_NVR == 0 )); then
-        rlLogWarning "Skipping: older fapolicyd NVR unavailable in enabled repos"
-      else
-        # fapolicyd.rules should be replace with populated rules.d
-        rlRun "rm -rf /etc/fapolicyd"
-        rlRun "dnf install fapolicyd-$V_old-$R_old -y --allowerasing"
-        rlRun "dnf reinstall fapolicyd-$V_old-$R_old -y --allowerasing"
-        rlRun "ls -la /etc/fapolicyd/"
-        rlRun "dnf install fapolicyd-$V-$R -y --allowerasing"
-        rlRun "ls -la /etc/fapolicyd/"
-        rlRun "ls -la /etc/fapolicyd/rules.d/"
-        rlAssertNotExists /etc/fapolicyd/fapolicyd.rules
-        rlAssertGreater "rules are deployed into /etc/fapolicyd/rules.d" $(ls -1 /etc/fapolicyd/rules.d | wc -w) 0
-      fi
+      # fapolicyd.rules should be replace with populated rules.d
+      rlRun "rm -rf /etc/fapolicyd"
+      rlRun "dnf install fapolicyd-$V_old-$R_old -y --allowerasing"
+      rlRun "dnf reinstall fapolicyd-$V_old-$R_old -y --allowerasing"
+      rlRun "ls -la /etc/fapolicyd/"
+      rlRun "dnf install fapolicyd-$V-$R -y --allowerasing"
+      rlRun "ls -la /etc/fapolicyd/"
+      rlRun "ls -la /etc/fapolicyd/rules.d/"
+      rlAssertNotExists /etc/fapolicyd/fapolicyd.rules
+      rlAssertGreater "rules are deployed into /etc/fapolicyd/rules.d" $(ls -1 /etc/fapolicyd/rules.d | wc -w) 0
     rlPhaseEnd; }
 
     rlPhaseStartTest "upgrade from old version - changed rules" && {
-      if (( HAVE_OLD_NVR == 0 )); then
-        rlLogWarning "Skipping: older fapolicyd NVR unavailable in enabled repos"
-      else
-        # fapolicyd.rules should stay untouched
-        # rules.d should not be populated
-        rlRun "rm -rf /etc/fapolicyd"
-        rlRun "dnf install fapolicyd-$V_old-$R_old -y --allowerasing"
-        rlRun "dnf reinstall fapolicyd-$V_old-$R_old -y --allowerasing"
-        echo "allow perm=any all : all" >> /etc/fapolicyd/fapolicyd.rules
-        rlRun "ls -la /etc/fapolicyd/"
-        rlRun "dnf install fapolicyd-$V-$R -y --allowerasing"
-        rlRun "ls -la /etc/fapolicyd/"
-        rlRun "ls -la /etc/fapolicyd/rules.d/"
-        rlAssertExists /etc/fapolicyd/fapolicyd.rules
-        rlAssertEquals "rules are deployed into /etc/fapolicyd/rules.d" $(ls -1 /etc/fapolicyd/rules.d | wc -w) 0
-      fi
+      # fapolicyd.rules should stay untouched
+      # rules.d should not be populated
+      rlRun "rm -rf /etc/fapolicyd"
+      rlRun "dnf install fapolicyd-$V_old-$R_old -y --allowerasing"
+      rlRun "dnf reinstall fapolicyd-$V_old-$R_old -y --allowerasing"
+      echo "allow perm=any all : all" >> /etc/fapolicyd/fapolicyd.rules
+      rlRun "ls -la /etc/fapolicyd/"
+      rlRun "dnf install fapolicyd-$V-$R -y --allowerasing"
+      rlRun "ls -la /etc/fapolicyd/"
+      rlRun "ls -la /etc/fapolicyd/rules.d/"
+      rlAssertExists /etc/fapolicyd/fapolicyd.rules
+      rlAssertEquals "rules are deployed into /etc/fapolicyd/rules.d" $(ls -1 /etc/fapolicyd/rules.d | wc -w) 0
     rlPhaseEnd; }
 
     rlPhaseStartTest "upgrade to new version - still with fapolicyd.rules" && {
