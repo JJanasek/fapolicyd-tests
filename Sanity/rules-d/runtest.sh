@@ -98,7 +98,7 @@ rules_d_resolve_older_fapolicyd_nvr() {
       best_v="$v"
       best_r="$r"
     fi
-  done < <(sort -u "$rlRun_LOG")
+  done < <(awk 'NF == 3 && ($1 ~ /^[0-9]+$/ || $1 == "(none)")' "$rlRun_LOG" | sort -u)
 
   if [[ -z $best_evr ]]; then
     rlLogError "no fapolicyd in repos older than installed ${V}-${R} (EVR ${inst_evr})"
