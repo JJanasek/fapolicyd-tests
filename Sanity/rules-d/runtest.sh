@@ -76,37 +76,25 @@ fapolicyd_spec_inject_rules_test_sed() {
 
 # Set V_old / R_old to the newest repo build that is still older than installed.
 rules_d_resolve_older_fapolicyd_nvr() {
-  local inst_epoch inst_evr e v r cand_evr best_evr best_v best_r
+  local inst_epoch inst_evr e v r nvr_line cand_evr
   inst_epoch=$(rpm -q --qf '%{epoch}' fapolicyd) || return 1
   [[ -z $inst_epoch || $inst_epoch == '(none)' ]] && inst_epoch=0
   inst_evr="${inst_epoch}:${V}-${R}"
 
-  rlRun -s "dnf -q repoquery --enablerepo='*' --available --qf '%{epoch} %{version} %{release}' fapolicyd" 0 "List available fapolicyd versions"
-
-  best_evr=""
-  best_v=""
-  best_r=""
-  while read -r e v r; do
-    [[ -n ${v:-} && -n ${r:-} ]] || continue
-    [[ -z ${e:-} || $e == '(none)' ]] && e=0
-    [[ $e =~ ^[0-9]+$ ]] || continue
-    cand_evr="${e}:${v}-${r}"
-
-    rlTestVersion "$cand_evr" "<" "$inst_evr" || continue
-    if [[ -z $best_evr ]] || rlTestVersion "$cand_evr" ">" "$best_evr"; then
-      best_evr="$cand_evr"
-      best_v="$v"
-      best_r="$r"
-    fi
-  done < <(awk 'NF == 3 && ($1 ~ /^[0-9]+$/ || $1 == "(none)")' "$rlRun_LOG" | sort -u)
-
-  if [[ -z $best_evr ]]; then
+  rlRun -s "dnf -q repoquery --enablerepo='*' --available --latest-limit=1 --qf '%{epoch} %{version} %{release}' \"fapolicyd < ${inst_evr}\"" 0-255 "Resolve latest older fapolicyd NVR"
+  nvr_line=$(awk 'NF == 3 && ($1 ~ /^[0-9]+$/ || $1 == "(none)") { print; exit }' "$rlRun_LOG")
+  IFS=' ' read -r e V_old R_old <<<"$nvr_line"
+  if [[ -z ${V_old:-} || -z ${R_old:-} ]]; then
     rlLogError "no fapolicyd in repos older than installed ${V}-${R} (EVR ${inst_evr})"
     rlLogInfo "Available versions in repo: $(tr '\n' '|' < "$rlRun_LOG")"
     return 1
   fi
-  V_old="$best_v"
-  R_old="$best_r"
+  [[ -z ${e:-} || $e == '(none)' ]] && e=0
+  cand_evr="${e}:${V_old}-${R_old}"
+  rlTestVersion "$cand_evr" "<" "$inst_evr" || {
+    rlLogError "resolved candidate ${V_old}-${R_old} is not older than installed ${V}-${R}"
+    return 1
+  }
   rlLogInfo "Older fapolicyd for upgrade tests: ${V_old}-${R_old} (installed ${V}-${R})"
 }
 
