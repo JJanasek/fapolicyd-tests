@@ -76,17 +76,24 @@ fapolicyd_spec_inject_rules_test_sed() {
 
 # Set V_old / R_old to the newest repo build that is still older than installed.
 rules_d_resolve_older_fapolicyd_nvr() {
-  local inst_epoch inst_evr
+  local inst_epoch inst_evr cand_epoch cand_evr nvr_line
   inst_epoch=$(rpm -q --qf '%{epoch}' fapolicyd) || return 1
   [[ -z $inst_epoch || $inst_epoch == '(none)' ]] && inst_epoch=0
   inst_evr="${inst_epoch}:${V}-${R}"
 
-  rlRun -s "dnf repoquery --enablerepo='*' --available --latest-limit=1 --qf '%{version} %{release}' \"fapolicyd < ${inst_evr}\"" 0 "Resolve latest older fapolicyd NVR"
-  IFS=' ' read -r V_old R_old < "$rlRun_LOG"
+  rlRun -s "dnf -q repoquery --enablerepo='*' --available --latest-limit=1 --qf '%{epoch} %{version} %{release}' \"fapolicyd < ${inst_evr}\"" 0 "Resolve latest older fapolicyd NVR"
+  nvr_line=$(awk 'NF == 3 && $1 !~ /:$/ { print; exit }' "$rlRun_LOG")
+  IFS=' ' read -r cand_epoch V_old R_old <<<"$nvr_line"
   if [[ -z ${V_old:-} || -z ${R_old:-} ]]; then
     rlLogError "no fapolicyd in repos older than installed ${V}-${R} (EVR ${inst_evr})"
     return 1
   fi
+  [[ -z $cand_epoch || $cand_epoch == '(none)' ]] && cand_epoch=0
+  cand_evr="${cand_epoch}:${V_old}-${R_old}"
+  rlTestVersion "$cand_evr" "<" "$inst_evr" || {
+    rlLogError "resolved candidate ${V_old}-${R_old} is not older than installed ${V}-${R}"
+    return 1
+  }
   rlLogInfo "Older fapolicyd for upgrade tests: ${V_old}-${R_old} (installed ${V}-${R})"
 }
 
